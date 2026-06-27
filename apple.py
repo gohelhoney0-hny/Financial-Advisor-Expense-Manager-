@@ -2,6 +2,8 @@ import streamlit as st
 import pytesseract
 from PIL import Image, ImageOps
 import re
+import plotly.express as px
+import pandas as pd
 
 # ------------------------------------
 # TESSERACT PATH (FOR LOCAL WINDOWS)
@@ -38,12 +40,16 @@ def extract_text(image):
 def parse_transaction(text):
     data = {}
 
-    # Extract amount (₹)
-    amount = re.findall(r'₹\s?(\d+)', text)
+    # Extract amount (₹ or Rs)
+    amount = re.findall(r'(?:₹|Rs\.?|INR)\s*([0-9]+(?:\.[0-9]{1,2})?)', text)
+    if not amount:
+        # Fallback to the first numeric value if currency symbol is missing
+        amount = re.findall(r'([0-9]+(?:\.[0-9]{1,2})?)', text)
+
     data["amount"] = amount[0] if amount else "Not found"
 
     # Extract UPI ID
-    upi = re.findall(r'[\w\.-]+@[\w]+', text)
+    upi = re.findall(r'[\w\.-]+@[\w\.-]+', text)
     data["upi_id"] = upi[0] if upi else "Not found"
 
     # Extract merchant keywords
@@ -172,5 +178,98 @@ if uploaded_file is not None:
         st.subheader("🧠 Financial Advice")
         st.info(advice)
 
+        # Prepare chart data if amount was extracted successfully
+        amount_value = None
+        try:
+            amount_value = float(parsed_data["amount"])
+        except Exception:
+            amount_value = None
+
+        if amount_value is not None:
+            df = pd.DataFrame([
+                {
+                    "amount": amount_value,
+                    "merchant": parsed_data["merchant"],
+                    "category": category,
+                }
+            ])
+
     except Exception as e:
-        st.error(f"Error processing file: {str(e)}")
+        st.error(f"An error occurred: {e}")
+
+# Create session storage
+if "expenses" not in st.session_state:
+    st.session_state.expenses = []
+
+# Save expenses after every upload if parsing succeeded
+if uploaded_file is not None and "parsed_data" in globals() and parsed_data.get("amount") != "Not found":
+    try:
+        st.session_state.expenses.append({
+            "amount": float(parsed_data["amount"]),
+            "category": category
+        })
+    except ValueError:
+        pass
+
+# Convert to DataFrame
+df = pd.DataFrame(st.session_state.expenses)
+
+if not df.empty:
+
+    st.subheader("📊 Expense Dashboard")
+
+    # -----------------------------
+    # 1. Donut Chart
+    # -----------------------------
+    donut_chart = px.pie(
+        df,
+        names="category",
+        values="amount",
+        title="Expense Distribution",
+        hole=0.5
+    )
+
+    st.plotly_chart(donut_chart, use_container_width=True)
+
+    # -----------------------------
+    # 2. Bar Chart
+    # -----------------------------
+    summary = df.groupby("category")["amount"].sum().reset_index()
+
+    bar_chart = px.bar(
+        summary,
+        x="category",
+        y="amount",
+        title="Category-wise Expense Comparison",
+        text="amount"
+    )
+
+    st.plotly_chart(bar_chart, use_container_width=True)
+
+    # -----------------------------
+    # 3. Line Chart
+    # -----------------------------
+    df["Transaction No"] = range(1, len(df) + 1)
+
+    line_chart = px.line(
+        df,
+        x="Transaction No",
+        y="amount",
+        title="Expense Trend Analysis",
+        markers=True
+    )
+
+    st.plotly_chart(line_chart, use_container_width=True)
+
+    # -----------------------------
+    # 4. Area Chart
+    # -----------------------------
+    area_chart = px.area(
+        df,
+        x="Transaction No",
+        y="amount",
+        title="Spending Growth"
+    )
+
+    st.plotly_chart(area_chart, use_container_width=True)
+
